@@ -1,4 +1,4 @@
-Ansi-Capture
+# Ansi-Capture
 
 Copyright (C) 2010 Helge Milde (original author)  
 Copyright (C) 2018 Jonathan Hayase (converted to work with Python3)  
