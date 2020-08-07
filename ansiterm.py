@@ -1,3 +1,4 @@
+from enum import Enum
 import re
 
 
@@ -25,7 +26,16 @@ class Tile:
         self.color['bold'] = color['bold']
 
 class Ansiterm:
-    _escape_parser = re.compile(r"^\x1b\[?(\??)([\d;]*)(\w)")
+    # TODO: Add support for EscO commands (two letters), number-only
+    _escape_parser = re.compile(r"^\x1b([\[\(\)\#/]?)(\??)([\d;]*)([\w=><])")
+    class Command(Enum):
+        RAW = ""
+        CSI_SEQ = "["
+        CHAR_SET1 = "("
+        CHAR_SET2 = ")"
+        CHAR_ALIGN = "#"
+        RESPONSE = "/"
+
 
     def __init__(self, rows, cols):
         """Initializes the ansiterm with rows*cols white-on-black spaces"""
@@ -103,7 +113,7 @@ class Ansiterm:
             raise Exception('Invalid escape sequence, data[:20]=%r' % data[:20])
 
         # Catch whether the escape code is marked as a private type
-        priv, args, char = match.groups()
+        seq_type, priv, args, char = match.groups()
         is_private = True if priv == '?' else False
 
         # If arguments are omitted, add the default argument for this sequence.
@@ -117,12 +127,12 @@ class Ansiterm:
         else:
             numbers = list(map(int, args.split(';')))
 
-        return (is_private, char, numbers), data[match.end() :]
+        return (Ansiterm.Command(seq_type), is_private, char, numbers), data[match.end() :]
 
     def get_cursor_idx(self):
         return self.cursor['y'] * self.cols + self.cursor['x']
 
-    def _evaluate_sequence(self, is_private, char, numbers, data):
+    def _evaluate_sequence(self, seq_type, is_private, char, numbers, data):
         """
         Evaluates a sequence (i.e., this changes the state of the terminal).
         Is meant to be called with the return values from _parse_sequence as arguments.
@@ -133,6 +143,10 @@ class Ansiterm:
         # If this is a private escape sequence, ignore it. (In the future these couldbe parsed.)
         if is_private:
             pass
+        # A catch for non-raw / non-CSI sequences; in the future this could be filled out.
+        elif seq_type != Ansiterm.Command.CSI_SEQ and seq_type != Ansiterm.Command.RAW: # CHAR_SET1, CHAR_SET2, CHAR_ALIGN, RESPONSE
+            pass
+
         # Sets cursor position
         elif char == 'H':
             self.cursor['y'] = numbers[0] - 1 # 1-based indexes
@@ -183,10 +197,16 @@ class Ansiterm:
         # Move cursor left
         elif char == 'D':
             self.cursor['x'] -= numbers[0]
+        # Toggle between special / normal character set; we will probably need to implement eventually.
+        elif char in 'FG':
+            pass
         elif char == 'r' or char == 'l': # TODO
             pass
         # Save / restore xterm icon; we can ignore this.
         elif char == 't':
+            pass
+        # Keypad modes; we can ignore these.
+        elif char in '=<>':
             pass
         else:
             raise Exception('Unknown escape code: char=%r numbers=%r data=%r' % (char, numbers, data[:20]))
