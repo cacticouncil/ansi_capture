@@ -1,4 +1,6 @@
 Copyright (c) 2010 Helge Milde
+Copyright (C) 2018 Jonathan Hayase
+Copyright (C) 2020 Jeremiah Blanchard, Cacti Council Inc.
  
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

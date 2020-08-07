@@ -25,7 +25,7 @@ class Tile:
         self.color['reverse'] = color['reverse']
         self.color['bold'] = color['bold']
 
-class Ansiterm:
+class AnsiTerm:
     # TODO: Add support for EscO commands (two letters), number-only
     _escape_parser = re.compile(r"^\x1b([\[\(\)\#/]?)(\??)([\d;]*)([\w=><])")
     class Command(Enum):
@@ -38,7 +38,7 @@ class Ansiterm:
 
 
     def __init__(self, rows, cols):
-        """Initializes the ansiterm with rows*cols white-on-black spaces"""
+        """Initializes the AnsiTerm with rows*cols white-on-black spaces"""
         self.rows = rows
         self.cols = cols
         self.tiles = [Tile() for _ in range(rows * cols)]
@@ -156,7 +156,7 @@ class Ansiterm:
         if data[0] != '\x1b':
             return None, data
 
-        match = Ansiterm._escape_parser.match(data)
+        match = AnsiTerm._escape_parser.match(data)
         if not match:
             raise Exception('Invalid escape sequence, data[:20]=%r' % data[:20])
 
@@ -175,7 +175,7 @@ class Ansiterm:
         else:
             numbers = list(map(int, args.split(';')))
 
-        return (Ansiterm.Command(seq_type), is_private, char, numbers), data[match.end() :]
+        return (AnsiTerm.Command(seq_type), is_private, char, numbers), data[match.end() :]
 
     def get_cursor_idx(self):
         return self.cursor['y'] * self.cols + self.cursor['x']
@@ -192,7 +192,7 @@ class Ansiterm:
         if is_private:
             pass
         # A catch for non-raw / non-CSI sequences; in the future this could be filled out.
-        elif seq_type != Ansiterm.Command.CSI_SEQ and seq_type != Ansiterm.Command.RAW: # CHAR_SET1, CHAR_SET2, CHAR_ALIGN, RESPONSE
+        elif seq_type != AnsiTerm.Command.CSI_SEQ and seq_type != AnsiTerm.Command.RAW: # CHAR_SET1, CHAR_SET2, CHAR_ALIGN, RESPONSE
             pass
 
         # Sets cursor position
@@ -283,6 +283,7 @@ class Ansiterm:
                 elif a == '\x0f' or a == '\x00':
                     pass
                 else:
+                    print("WRITE: [%s] at (%d,%d), index %d " % (a, self.cursor['x'], self.cursor['y'], self.get_cursor_idx()))
                     self.tiles[self.get_cursor_idx()].set(a, self.color)
                     self.cursor['x'] += 1
 

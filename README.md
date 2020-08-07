@@ -1,3 +1,7 @@
+Copyright (C) 2010 Helge Milde (original author)
+Copyright (C) 2018 Jonathan Hayase (converted to work with Python3)
+Copyright (C) 2020 Jeremiah Blanchard, Cacti Council Inc. (Active; adding codes / cleanup)
+
 A virtual terminal for parsing ANSI escape codes in python..
 Call feed() with input and get back output with get_string() or get_tiles(). Supports colors, bold and reverse, and most of the escape codes.
 Works with the game nethack, but i haven't tested it with anything else yet.
@@ -12,7 +16,7 @@ $ python
 >>> term = ansiterm.Ansiterm(25, 80)
 >>> term.feed(input)
 >>> output = '\n'.join(term.get_string(y * 80, y * 80 + 80) for y in xrange(25))
->>> print output
+>>> print(output)
 
  ## nethack.alt.org - http://nethack.alt.org/
  ##
@@ -35,7 +39,7 @@ $ python
 
 
 
-
-
-
+New in 2020:
+--Added recognition of additional ANSI codes and VT100 codes (see commit logs)
+--Added recognition of private CSI escape sequences (see commit logs)
 
