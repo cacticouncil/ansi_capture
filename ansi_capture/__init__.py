@@ -37,10 +37,11 @@ class AnsiTerm:
         RESPONSE = "/"
 
 
-    def __init__(self, rows, cols):
+    def __init__(self, rows, cols, linefeed_is_newline=True):
         """Initializes the AnsiTerm with rows*cols white-on-black spaces"""
         self.rows = rows
         self.cols = cols
+        self.linefeed_is_newline = linefeed_is_newline
         self.tiles = [Tile() for _ in range(rows * cols)]
         self.cursor = {
             'x': 0,
@@ -280,10 +281,11 @@ class AnsiTerm:
                     self.cursor['x'] -= 1
                 elif a == '\n':
                     self.cursor['y'] += 1
+                    if self.linefeed_is_newline:
+                        self.cursor['x'] = 0
                 elif a == '\x0f' or a == '\x00':
                     pass
                 else:
-                    print("WRITE: [%s] at (%d,%d), index %d " % (a, self.cursor['x'], self.cursor['y'], self.get_cursor_idx()))
                     self.tiles[self.get_cursor_idx()].set(a, self.color)
                     self.cursor['x'] += 1
 
