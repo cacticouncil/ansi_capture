@@ -1,11 +1,13 @@
 import re
 
+
 class Tile:
     """Represents a single tile in the terminal"""
+
     def __init__(self):
         self.color = self.glyph = None
         self.reset()
-    
+
     def reset(self):
         """Resets the tile to a white-on-black space"""
         self.color = {
@@ -23,7 +25,8 @@ class Tile:
         self.color['bold'] = color['bold']
 
 class Ansiterm:
-    _escape_parser = re.compile(r'^\x1b\[?([\d;]*)(\w)')
+    _escape_parser = re.compile(r"^\x1b\[?(\??)([\d;]*)(\w)")
+
     def __init__(self, rows, cols):
         """Initializes the ansiterm with rows*cols white-on-black spaces"""
         self.rows = rows
@@ -82,25 +85,27 @@ class Ansiterm:
         if self.cursor['y'] >= self.rows:
             self.cursor['y'] = self.rows - 1
 
-    def _parse_sequence(self, input):
+    def _parse_sequence(self, data):
         """
         This method parses the input into the numeric arguments and
         the type of sequence. If no numeric arguments are supplied,
         we manually insert a 0 or a 1 depending on the sequence type,
         because different types have different default values.
-        
+
         Example 1: \x1b[1;37;40m -> numbers=[1, 37, 40] char=m
         Example 2: \x1b[m = numbers=[0] char=m
         """
         if input[0] != '\x1b':
             return None, input
 
-        match = Ansiterm._escape_parser.match(input)
+        match = Ansiterm._escape_parser.match(data)
         if not match:
-            raise Exception('Invalid escape sequence, input[:20]=%r' %\
-                            input[:20])
+            raise Exception('Invalid escape sequence, data[:20]=%r' % data[:20])
 
-        args, char = match.groups()
+        # Catch whether the escape code is marked as a private type
+        priv, args, char = match.groups()
+        is_private = True if priv == '?' else False
+
         # If arguments are omitted, add the default argument for this sequence.
         if not args:
             if char in 'ABCDEFSTf':
@@ -112,12 +117,12 @@ class Ansiterm:
         else:
             numbers = list(map(int, args.split(';')))
 
-        return (char, numbers), input[match.end():]
+        return (is_private, char, numbers), data[match.end() :]
 
     def get_cursor_idx(self):
         return self.cursor['y'] * self.cols + self.cursor['x']
 
-    def _evaluate_sequence(self, char, numbers):
+    def _evaluate_sequence(self, is_private, char, numbers, data):
         """
         Evaluates a sequence (i.e., this changes the state of the terminal).
         Is meant to be called with the return values from _parse_sequence as arguments.
@@ -125,8 +130,11 @@ class Ansiterm:
         # Translate the cursor into an index into our 1-dimensional tileset.
         curidx = self.get_cursor_idx()
 
+        # If this is a private escape sequence, ignore it. (In the future these couldbe parsed.)
+        if is_private:
+            pass
         # Sets cursor position
-        if char == 'H':
+        elif char == 'H':
             self.cursor['y'] = numbers[0] - 1 # 1-based indexes
             self.cursor['x'] = numbers[1] - 1 #
         # Sets color/boldness
@@ -145,8 +153,7 @@ class Ansiterm:
             elif numbers[0] == 2:
                 range_ = (0, self.cols * self.rows - 1)
             else:
-                raise Exception('Unknown argument for J parameter: '
-                                '%s (input=%r)' % (numbers, input[:20]))
+                raise Exception('Unknown argument for J parameter: %s (data=%r)' % (numbers, data[:20]))
             for i in range(*range_):
                 self.tiles[i].reset()
         # Clears (parts of) the line
@@ -161,8 +168,7 @@ class Ansiterm:
             elif numbers[0] == 2:
                 range_ = (curidx % self.cols, curidx % self.cols + self.cols)
             else:
-                raise Exception('Unknown argument for K parameter: '
-                                '%s (input=%r)' % (numbers, input[:20]))
+                raise Exception('Unknown argument for K parameter: %s (data=%r)' % (numbers, data[:20]))
             for i in range(*range_):
                 self.tiles[i].reset()
         # Move cursor up
@@ -179,18 +185,20 @@ class Ansiterm:
             self.cursor['x'] -= numbers[0]
         elif char == 'r' or char == 'l': # TODO
             pass
+        # Save / restore xterm icon; we can ignore this.
+        elif char == 't':
+            pass
         else:
-            raise Exception('Unknown escape code: char=%r numbers=%r input=%r'\
-                            % (char, numbers, input[:20]))
+            raise Exception('Unknown escape code: char=%r numbers=%r data=%r' % (char, numbers, data[:20]))
 
-    def feed(self, input):
+    def feed(self, data):
         """Feeds the terminal with input."""
-        while input:
-            # If the input starts with \x1b, try to parse end evaluate a
+        while data:
+            # If the data starts with \x1b, try to parse end evaluate a
             # sequence.
-            parsed, input = self._parse_sequence(input)
+            parsed, data = self._parse_sequence(data)
             if parsed:
-                self._evaluate_sequence(*parsed)
+                self._evaluate_sequence(*parsed, data)
             else:
                 # If we end up here, the character should should just be
                 # added to the current tile and the cursor should be updated.
@@ -210,5 +218,5 @@ class Ansiterm:
                     self.tiles[self.get_cursor_idx()].set(a, self.color)
                     self.cursor['x'] += 1
 
-                input = input[1:]
+                data = data[1:]
         self._fix_cursor()
