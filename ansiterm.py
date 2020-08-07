@@ -95,8 +95,8 @@ class Ansiterm:
         Example 1: \x1b[1;37;40m -> numbers=[1, 37, 40] char=m
         Example 2: \x1b[m = numbers=[0] char=m
         """
-        if input[0] != '\x1b':
-            return None, input
+        if data[0] != '\x1b':
+            return None, data
 
         match = Ansiterm._escape_parser.match(data)
         if not match:
@@ -205,7 +205,7 @@ class Ansiterm:
                 # Some characters such as \r, \n will only affect the cursor.
                 # TODO: Find out exactly what should be accepted here.
                 #       Only ASCII-7 perhaps?
-                a = input[0]
+                a = data[0]
                 if a == '\r':
                     self.cursor['x'] = 0
                 elif a == '\b':
