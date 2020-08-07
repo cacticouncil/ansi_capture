@@ -64,24 +64,72 @@ class Ansiterm:
         """Returns the current position of the curser"""
         return self.cursor.copy()
 
-    def _parse_sgr(self, param):
+    def _parse_sgr(self, params):
         """Handles <escape code>n[;k]m, which changes the graphic rendition"""
-        if param >= 30 and param <= 37:
-            self.color['fg'] = param
-        elif param >= 40 and param <= 47:
-            self.color['bg'] = param
-        elif param == 1:
-            self.color['bold'] = True
-        elif param == 7:
-            self.color['reverse'] = True
-        elif param == 0:
+        param = params.pop(0)
+
+        if param == 0:
             self.color['fg'] = 37
             self.color['bg'] = 40
             self.color['bold'] = False
             self.color['reverse'] = False
+        elif param == 1:
+            self.color['bold'] = True
+        elif param == 7:
+            self.color['reverse'] = True
+        # Special text decoration; could be supported in a future version potentially.
+        elif param > 7 and param < 30:
+            pass
+        elif param >= 30 and param <= 37:
+            self.color['fg'] = param
+        # Extended foreground color set command
+        elif param == 38:
+            subtype = params.pop(0)
+            # Colors in T.416; implement later? See https://en.wikipedia.org/wiki/ANSI_escape_code#8-bit
+            if subtype == 5:
+                color_code = params.pop(0)
+            # 24-bit colors; implement later? See https://en.wikipedia.org/wiki/ANSI_escape_code#24-bit
+            elif subtype == 2:
+                red, green, blue = params[0:3]
+                del param[:3]
+        elif param == 39:
+            self.color['fg'] = 37
+
+        elif param >= 40 and param <= 47:
+            self.color['bg'] = param
+        # Extended foreground color set command
+        elif param == 48:
+            subtype = params.pop(0)
+            # Colors in T.416; implement later? See https://en.wikipedia.org/wiki/ANSI_escape_code#8-bit
+            if subtype == 5:
+                color_code = params.pop(0)
+            # 24-bit colors; implement later? See https://en.wikipedia.org/wiki/ANSI_escape_code#24-bit
+            elif subtype == 2:
+                red, green, blue = params[0:3]
+                del param[:3]
+        elif param == 49:
+            self.color['bg'] = 40
+
+        # Additional docorative codes
+        elif param > 49 and param < 56:
+            pass
+        # Additional docorative codes / color codes
+        elif param > 57 and param < 66:
+            pass
+        # Superscript / subscript codes
+        elif param == 73 or param == 74:
+            pass
+        # Bright foreground colors
+        elif param > 89 and param < 98:
+            pass
+        # Bright background colors
+        elif param > 99 and param < 108:
+            pass
+        # Unknown mode code
         else:
-            return False
-        return True
+            pass
+
+        return params
 
     def _fix_cursor(self):
         """
@@ -153,8 +201,8 @@ class Ansiterm:
             self.cursor['x'] = numbers[1] - 1 #
         # Sets color/boldness
         elif char == 'm' or char == 'M':
-            for num in numbers:
-                self._parse_sgr(num)
+            while numbers:
+                numbers = self._parse_sgr(numbers)
         # Clears (parts of) the screen.
         elif char == 'J':
             # From cursor to end of screen
