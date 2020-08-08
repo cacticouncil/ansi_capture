@@ -2,6 +2,7 @@ from enum import Enum
 import re
 import sys
 
+
 class Tile:
     """Represents a single tile in the terminal"""
 
@@ -24,6 +25,7 @@ class Tile:
         self.color['bg'] = color['bg']
         self.color['reverse'] = color['reverse']
         self.color['bold'] = color['bold']
+
 
 class AnsiTerm:
     # Special graphics characters for box-drawing, etc.
@@ -49,10 +51,11 @@ class AnsiTerm:
     _csi_priv_final_pattern = re.compile('[%s]' % _csi_priv_final)
 
 
-    def __init__(self, rows, cols, linefeed_is_newline=True):
+    def __init__(self, rows, cols, linefeed_is_newline=True, silent=False):
         """Initializes the AnsiTerm with rows*cols white-on-black spaces"""
         self.rows = rows
         self.cols = cols
+        self.silent = silent
         self.tiles = [Tile() for _ in range(rows * cols)]
 
         self.linefeed_is_newline = linefeed_is_newline
@@ -68,6 +71,11 @@ class AnsiTerm:
             'bold': False,
             'reverse': False,
         }
+
+    def errlog(self, text):
+        if not self.silent:
+            sys.stderr.write(text + "\n")
+
 
     def get_screen(self):
         return ''.join([tile.glyph + self.nl if (index + 1) % self.cols == 0 else tile.glyph for index, tile in enumerate(self.tiles)])
@@ -153,7 +161,7 @@ class AnsiTerm:
 
 
     def _evaluate_private_csi(self, params, interm, final, data):
-        sys.stderr.write("WARNING: unimplemented private CSI sequence - %s(%s)%s\n" % (interm + ":" if interm else "", params, final))
+        self.errlog("WARNING: unimplemented private CSI sequence - %s(%s)%s" % (interm + ":" if interm else "", params, final))
         if final == 'r': # TODO?
             pass
         # Save / restore xterm icon; we can ignore this.
@@ -166,7 +174,7 @@ class AnsiTerm:
         csi_match = AnsiTerm._csi_parser.match(data)
 
         if not csi_match:
-            sys.stderr.write("ERROR: invalid CSI sequence; data[:20] = %r\n" % data[:20])
+            self.errlog("ERROR: invalid CSI sequence; data[:20] = %r" % data[:20])
             return data
 
         params, interm, final = csi_match.groups()
@@ -179,12 +187,12 @@ class AnsiTerm:
 
         # The colon is not in any valid CSI sequences (currently).
         if ':' in params:
-            sys.stderr.write("ERROR: CSI parameters contain invalid character: %r\n" % csi_text)
+            self.errlog("ERROR: CSI parameters contain invalid character: %r" % csi_text)
             return data
 
         # Standard CSI codes do not have intermediate characters; show an error if we find them.
         if interm:
-            sys.stderr.write("ERROR: CSI code with invalid intermediate characters: %r\n" % csi_text)
+            self.errlog("ERROR: CSI code with invalid intermediate characters: %r" % csi_text)
 
         # If arguments are omitted, add the default argument for this sequence.
         if not params:
@@ -227,7 +235,7 @@ class AnsiTerm:
 
         # If there's no match, but there was an escape character, send warning and try to recover.
         if not esc_match:
-            sys.stderr.write('ERROR: invalid escape sequence; data = %r...\n' % data[:20])
+            self.errlog('ERROR: invalid escape sequence; data = %r...' % data[:20])
             return data[1:] # Skip the escape character and return.
 
         # Extract the intermediate and final characters, along with sequence text (for errors)
@@ -238,7 +246,7 @@ class AnsiTerm:
         # If this is a CSI sequence, parse the CSI elements.
         if esc_final == '[':
             if esc_interm:
-                sys.stderr.write('WARNING: Intermediate chars in CSI escape: %r\n' % esc_text)
+                self.errlog('WARNING: Intermediate chars in CSI escape: %r' % esc_text)
             return self._parse_csi(data)
 
         elif esc_interm == '':
@@ -247,7 +255,7 @@ class AnsiTerm:
             elif esc_final == '8': # Restore cursor position / attributes
                 pass
             elif esc_final in 'ABCIJK': # VT52 are sequences not supported due to conflicts
-                sys.stderr.write('WARNING: skipping VT52 sequence: %r\n' % esc_text)
+                self.errlog('WARNING: skipping VT52 sequence: %r' % esc_text)
             elif esc_final == 'D': # Line feed
                 pass
             elif esc_final == 'E': # New line
@@ -265,26 +273,26 @@ class AnsiTerm:
             elif esc_final in '=>NOPXZ\\]^_lm': # Ignored codes (not relevant for state / unused)
                 pass
             elif esc_final in 'no|}~': # Character set commands
-                sys.stderr.write('WARNING: Character set command not implemented: %r\n' % esc_text)
+                self.errlog('WARNING: Character set command not implemented: %r' % esc_text)
             elif esc_final in '01234569:;<?': # Private codes not used by Linux terminal
-                sys.stderr.write('WARNING: Skipping unknown private sequence: %r\n' % esc_text)
+                self.errlog('WARNING: Skipping unknown private sequence: %r' % esc_text)
             else: # Non-private, invalid codes
-                sys.stderr.write('ERROR: Skipping unknown public sequence: %r\n' % esc_text)
+                self.errlog('ERROR: Skipping unknown public sequence: %r' % esc_text)
 
             if esc_final in "78DEFGHMc":
-                sys.stderr.write('WARNING: Unimplemented public sequence: %r\n' % esc_text)
+                self.errlog('WARNING: Unimplemented public sequence: %r' % esc_text)
 
         # TODO: If this is a graphcs mode change, catch it.
         elif esc_final in '012ABKU' and esc_interm in '()*+':
             if esc_interm in ')*"':
-                sys.stderr.write('WARNING: G1,G2,G3 character sets not implemented: %r\n' % esc_text)
+                self.errlog('WARNING: G1,G2,G3 character sets not implemented: %r' % esc_text)
                 return data
 
             if esc_final in '12':
-                sys.stderr.write('WARNING: No support for no-standard graphics; using default: %r\n' % esc_text)
+                self.errlog('WARNING: No support for no-standard graphics; using default: %r' % esc_text)
                 final = '0'
             if esc_final in 'AUK':
-                sys.stderr.write('WARNING: No support for UK, null, or user mapping; using ASCII: %r\n' % esc_text)
+                self.errlog('WARNING: No support for UK, null, or user mapping; using ASCII: %r' % esc_text)
                 final = 'B'
 
             if esc_final == '0': # Switch to special graphics (line drawing) mode for G0
@@ -301,10 +309,10 @@ class AnsiTerm:
             pass
 
         elif esc_final in '0123456789:;<=>?': # Ignore unknown private sequences
-            sys.stderr.write("WARNING: Skipping unknown private sequence: %r\n" % esc_text)
+            self.errlog("WARNING: Skipping unknown private sequence: %r" % esc_text)
 
         else:
-            sys.stderr.write("ERROR: Skipping unknown public sequence: %r\n" % esc_text)
+            self.errlog("ERROR: Skipping unknown public sequence: %r" % esc_text)
 
         return data
 
@@ -368,7 +376,7 @@ class AnsiTerm:
             elif numbers[0] == 2:
                 range_ = (0, self.cols * self.rows - 1)
             else:
-                sys.stderr.write('ERROR: Unknown argument(s) in CSI command J%s\n' % numbers)
+                self.errlog('ERROR: Unknown argument(s) in CSI command J%s' % numbers)
                 return data
             for i in range(*range_):
                 self.tiles[i].reset()
@@ -385,7 +393,7 @@ class AnsiTerm:
             elif numbers[0] == 2:
                 range_ = (curidx % self.cols, curidx % self.cols + self.cols)
             else:
-                sys.stderr.write('ERROR: Unknown argument(s) in CSI command K%s\n' % numbers)
+                self.errlog('ERROR: Unknown argument(s) in CSI command K%s' % numbers)
                 return data
             for i in range(*range_):
                 self.tiles[i].reset()
@@ -431,10 +439,10 @@ class AnsiTerm:
             pass
 
         else:
-            sys.stderr.write('ERROR: Unknown CSI sequence: %s%s\n' % (final, numbers))
+            self.errlog('ERROR: Unknown CSI sequence: %s%s' % (final, numbers))
 
         if final in 'ILMPXZbghl':
-            sys.stderr.write("WARNING: CSI sequence not implemented: %s%s\n" % (final, numbers))
+            self.errlog("WARNING: CSI sequence not implemented: %s%s" % (final, numbers))
 
         return data
 
