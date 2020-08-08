@@ -26,6 +26,9 @@ class Tile:
         self.color['bold'] = color['bold']
 
 class AnsiTerm:
+    # Special graphics characters for box-drawing, etc.
+    _special_graphics_chars = '◆▒␉␌␍␊°±␤␋┘┐┌└┼⎺⎻─⎼⎽├┤┴┬│≤≥π≠£·'
+
     # Character types in an ANSI escape sequence
     _intermediate = re.escape(''.join([chr(val) for val in range(0x20, 0x30)]))
     _esc_final = re.escape(''.join([chr(val) for val in range(0x30, 0x7f)]))
@@ -45,22 +48,17 @@ class AnsiTerm:
     _csi_priv_param_pattern = re.compile('[%s]' % _csi_priv_param)
     _csi_priv_final_pattern = re.compile('[%s]' % _csi_priv_final)
 
-    class Command(Enum):
-        RAW = ''
-        CSI_SEQ = '['
-        CHAR_SET1 = '('
-        CHAR_SET2 = ')'
-        CHAR_ALIGN = '#'
-        RESPONSE = '/'
-
 
     def __init__(self, rows, cols, linefeed_is_newline=True):
         """Initializes the AnsiTerm with rows*cols white-on-black spaces"""
         self.rows = rows
         self.cols = cols
-        self.linefeed_is_newline = linefeed_is_newline
         self.tiles = [Tile() for _ in range(rows * cols)]
+
+        self.linefeed_is_newline = linefeed_is_newline
         self.nl = '\n' if linefeed_is_newline else '\r\n'
+        self.graphics_mode = False;
+
         self.cursor = {
             'x': 0,
             'y': 0,
@@ -155,6 +153,7 @@ class AnsiTerm:
 
 
     def _evaluate_private_csi(self, params, interm, final, data):
+        sys.stderr.write("WARNING: unimplemented private CSI sequence - %s%s%s\n" % (final, ":" + interm if interm else "", params))
         if final == 'r': # TODO?
             pass
         # Save / restore xterm icon; we can ignore this.
@@ -272,10 +271,27 @@ class AnsiTerm:
             else: # Non-private, invalid codes
                 sys.stderr.write('ERROR: Skipping unknown public sequence: %r\n' % esc_text)
 
+            if esc_final in "78DEFGHMc":
+                sys.stderr.write('WARNING: Unimplemented public sequence: %r\n' % esc_text)
+
         # TODO: If this is a graphcs mode change, catch it.
         elif esc_final in '012ABKU' and esc_interm in '()*+':
-            if esc_final == '0': # Switch to special graphics (line drawing) mode (for G0 or G1)
-                pass
+            if esc_interm in ')*"':
+                sys.stderr.write('WARNING: G1,G2,G3 character sets not implemented: %r\n' % esc_text)
+                return data
+
+            if esc_final in '12':
+                sys.stderr.write('WARNING: No support for no-standard graphics; using default: %r\n' % esc_text)
+                final = '0'
+            if esc_final in 'AUK':
+                sys.stderr.write('WARNING: No support for UK, null, or user mapping; using ASCII: %r\n' % esc_text)
+                final = 'B'
+
+            if esc_final == '0': # Switch to special graphics (line drawing) mode for G0
+                self.graphics_mode = True
+            else: # Only case is ASCII move for G0
+                self.graphics_mode = False
+
 
         elif esc_final in '@G8' and interm == '%':
             pass
@@ -449,6 +465,11 @@ class AnsiTerm:
             elif a == '\x0f' or a == '\x00':
                 pass
             else:
+                # If we're in graphics mode & the character is above 0x5f, use the special glyph.
+                if self.graphics_mode:
+                    if ord(a) >= ord('`'):
+                        a = AnsiTerm._special_graphics_chars[ord(a) - ord('`')]
+
                 self.tiles[self.get_cursor_idx()].set(a, self.color)
                 self.cursor['x'] += 1
             data = data[1:]
