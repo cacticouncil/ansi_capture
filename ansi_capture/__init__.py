@@ -5,19 +5,16 @@ import sys
 
 class Tile:
     """Represents a single tile in the terminal"""
-
     def __init__(self):
         self.color = self.glyph = None
         self.reset()
 
+
     def reset(self):
         """Resets the tile to a white-on-black space"""
-        self.color = {
-            'fg': 37, 'bg': 40,
-            'reverse': False,
-            'bold': False,
-        }
+        self.color = {'fg': 37, 'bg': 40, 'reverse': False, 'bold': False}
         self.glyph = ' '
+
 
     def set(self, glyph, color):
         self.glyph = glyph
@@ -57,20 +54,17 @@ class AnsiTerm:
         self.cols = cols
         self.silent = silent
         self.tiles = [Tile() for _ in range(rows * cols)]
-
         self.linefeed_is_newline = linefeed_is_newline
         self.nl = '\n' if linefeed_is_newline else '\r\n'
-        self.graphics_mode = False;
+        self.reset()
 
-        self.cursor = {
-            'x': 0,
-            'y': 0,
-        }
-        self.color = {
-            'fg': 37, 'bg': 40,
-            'bold': False,
-            'reverse': False,
-        }
+
+    def reset(self):
+        self.graphics_mode = False
+        self.cursor = {'x': 0, 'y': 0}
+        self.color = {'fg': 37, 'bg': 40, 'bold': False, 'reverse': False}
+        [tile.reset() for tile in self.tiles]
+
 
     def errlog(self, text):
         if not self.silent:
@@ -80,17 +74,21 @@ class AnsiTerm:
     def get_screen(self):
         return ''.join([tile.glyph + self.nl if (index + 1) % self.cols == 0 else tile.glyph for index, tile in enumerate(self.tiles)])
 
+
     def get_string(self, from_, to):
         """Returns the character of a section of the screen"""
         return ''.join([tile.glyph for tile in self.get_tiles(from_, to)])
+
 
     def get_tiles(self, from_, to):
         """Returns the tileset of a section of the screen"""
         return [tile for tile in self.tiles[from_:to]]
 
+
     def get_cursor(self):
         """Returns the current position of the curser"""
         return self.cursor.copy()
+
 
     def _parse_sgr(self, params):
         """Handles <escape code>n[;k]m, which changes the graphic rendition"""
@@ -268,8 +266,8 @@ class AnsiTerm:
                 pass
             elif esc_final == 'M': # Reverse line fee
                 pass
-            elif esc_final == 'c': # Reset terminal (clear?)
-                pass
+            elif esc_final == 'c': # Reset terminal
+                self.reset()
             elif esc_final in '=>NOPXZ\\]^_lm': # Ignored codes (not relevant for state / unused)
                 pass
             elif esc_final in 'no|}~': # Character set commands
