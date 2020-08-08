@@ -1,6 +1,6 @@
 from enum import Enum
 import re
-
+import sys
 
 class Tile:
     """Represents a single tile in the terminal"""
@@ -26,15 +26,32 @@ class Tile:
         self.color['bold'] = color['bold']
 
 class AnsiTerm:
-    # TODO: Add support for EscO commands (two letters), number-only
-    _escape_parser = re.compile(r"^\x1b([\[\(\)\#/]?)(\??)([\d;]*)([\w=><])")
+    # Character types in an ANSI escape sequence
+    _intermediate = re.escape(''.join([chr(val) for val in range(0x20, 0x30)]))
+    _esc_final = re.escape(''.join([chr(val) for val in range(0x30, 0x7f)]))
+
+    # CSI sequence-specific character types (subsets of ANSI final characters)
+    _csi_param = re.escape(''.join([chr(val) for val in range(0x30, 0x40)]))
+    _csi_final = re.escape(''.join([chr(val) for val in range(0x40, 0x7f)]))
+
+    # CSI private param / final characters
+    _csi_priv_param = re.escape("<=>?")
+    _csi_priv_final = re.escape(''.join([chr(val) for val in range(0x70, 0x7f)]))
+
+    # Escape sequence:  { ESC [I]* F }; capture intermediates and final.
+    # CSE sequence "[": { [P]* [I]* F }; capture params, intermediates, and final.
+    _escape_parser = re.compile('^\\x1b([%s]*)([%s])' % (_intermediate, _esc_final))
+    _csi_parser = re.compile('^([%s]*)([%s]*)([%s])' % (_csi_param, _intermediate, _csi_final))
+    _csi_priv_param_pattern = re.compile('[%s]' % _csi_priv_param)
+    _csi_priv_final_pattern = re.compile('[%s]' % _csi_priv_final)
+
     class Command(Enum):
-        RAW = ""
-        CSI_SEQ = "["
-        CHAR_SET1 = "("
-        CHAR_SET2 = ")"
-        CHAR_ALIGN = "#"
-        RESPONSE = "/"
+        RAW = ''
+        CSI_SEQ = '['
+        CHAR_SET1 = '('
+        CHAR_SET2 = ')'
+        CHAR_ALIGN = '#'
+        RESPONSE = '/'
 
 
     def __init__(self, rows, cols, linefeed_is_newline=True):
@@ -43,6 +60,7 @@ class AnsiTerm:
         self.cols = cols
         self.linefeed_is_newline = linefeed_is_newline
         self.tiles = [Tile() for _ in range(rows * cols)]
+        self.nl = '\n' if linefeed_is_newline else '\r\n'
         self.cursor = {
             'x': 0,
             'y': 0,
@@ -52,6 +70,9 @@ class AnsiTerm:
             'bold': False,
             'reverse': False,
         }
+
+    def get_screen(self):
+        return ''.join([tile.glyph + self.nl if (index + 1) % self.cols == 0 else tile.glyph for index, tile in enumerate(self.tiles)])
 
     def get_string(self, from_, to):
         """Returns the character of a section of the screen"""
@@ -132,6 +153,54 @@ class AnsiTerm:
 
         return params
 
+
+    def _evaluate_private_csi(self, params, interm, final, data):
+        if final == 'r': # TODO?
+            pass
+        # Save / restore xterm icon; we can ignore this.
+        elif final == 't':
+            pass
+        return data
+
+
+    def _parse_csi(self, data):
+        csi_match = AnsiTerm._csi_parser.match(data)
+
+        if not csi_match:
+            sys.stderr.write("ERROR: invalid CSI sequence; data[:20] = %r\n" % data[:20])
+            return data
+
+        params, interm, final = csi_match.groups()
+        csi_text = csi_match[0]
+        data = data[csi_match.end():]
+
+        # Is this a private sequence? We can recognize some of them. We'll try to parse.
+        if AnsiTerm._csi_priv_param_pattern.findall(params) or AnsiTerm._csi_priv_final_pattern.findall(final):
+            return self._evaluate_private_csi(params, interm, final, data)
+
+        # The colon is not in any valid CSI sequences (currently).
+        if ':' in params:
+            sys.stderr.write("ERROR: CSI parameters contain invalid character: %r\n" % csi_text)
+            return data
+
+        # Standard CSI codes do not have intermediate characters; show an error if we find them.
+        if interm:
+            sys.stderr.write("ERROR: CSI code with invalid intermediate characters: %r\n" % csi_text)
+
+        # If arguments are omitted, add the default argument for this sequence.
+        if not params:
+            if final in '@ABCDEFGILMPSTXZ`abde':
+                numbers = [1]
+            elif final in 'Hf':
+                numbers = [1, 1]
+            else:
+                numbers = [0]
+        else:
+            numbers = list(map(int, params.split(';')))
+
+        return self._evaluate_csi_sequence(final, numbers, data)
+
+
     def _fix_cursor(self):
         """
         Makes sure the cursor are within the boundaries of the current terminal
@@ -144,6 +213,7 @@ class AnsiTerm:
         if self.cursor['y'] >= self.rows:
             self.cursor['y'] = self.rows - 1
 
+
     def _parse_sequence(self, data):
         """
         This method parses the input into the numeric arguments and
@@ -154,34 +224,80 @@ class AnsiTerm:
         Example 1: \x1b[1;37;40m -> numbers=[1, 37, 40] char=m
         Example 2: \x1b[m = numbers=[0] char=m
         """
-        if data[0] != '\x1b':
-            return None, data
+        esc_match = AnsiTerm._escape_parser.match(data)
 
-        match = AnsiTerm._escape_parser.match(data)
-        if not match:
-            raise Exception('Invalid escape sequence, data[:20]=%r' % data[:20])
+        # If there's no match, but there was an escape character, send warning and try to recover.
+        if not esc_match:
+            sys.stderr.write('ERROR: invalid escape sequence; data = %r...\n' % data[:20])
+            return data[1:] # Skip the escape character and return.
 
-        # Catch whether the escape code is marked as a private type
-        seq_type, priv, args, char = match.groups()
-        is_private = True if priv == '?' else False
+        # Extract the intermediate and final characters, along with sequence text (for errors)
+        esc_interm, esc_final = esc_match.groups()
+        esc_text = esc_match[0]
+        data = data[esc_match.end():]
 
-        # If arguments are omitted, add the default argument for this sequence.
-        if not args:
-            if char in 'ABCDEFSTf':
-                numbers = [1]
-            elif char == 'H':
-                numbers = [1, 1]
-            else:
-                numbers = [0]
+        # If this is a CSI sequence, parse the CSI elements.
+        if esc_final == '[':
+            if esc_interm:
+                sys.stderr.write('WARNING: Intermediate chars in CSI escape: %r\n' % esc_text)
+            return self._parse_csi(data)
+
+        elif esc_interm == '':
+            if esc_final == '7': # Save cursor position / attributes
+                pass
+            elif esc_final == '8': # Restore cursor position / attributes
+                pass
+            elif esc_final in 'ABCIJK': # VT52 are sequences not supported due to conflicts
+                sys.stderr.write('WARNING: skipping VT52 sequence: %r\n' % esc_text)
+            elif esc_final == 'D': # Line feed
+                pass
+            elif esc_final == 'E': # New line
+                pass
+            elif esc_final == 'F': # Move cursor to lower left corner of screen
+                pass
+            elif esc_final == 'G': # Select UTF-8 (ignore?)
+                pass
+            elif esc_final == 'H': # Set tab stop... implement?
+                pass
+            elif esc_final == 'M': # Reverse line fee
+                pass
+            elif esc_final == 'c': # Reset terminal (clear?)
+                pass
+            elif esc_final in '=>NOPXZ\\]^_lm': # Ignored codes (not relevant for state / unused)
+                pass
+            elif esc_final in 'no|}~': # Character set commands
+                sys.stderr.write('WARNING: Character set command not implemented: %r\n' % esc_text)
+            elif esc_final in '01234569:;<?': # Private codes not used by Linux terminal
+                sys.stderr.write('WARNING: Skipping unknown private sequence: %r\n' % esc_text)
+            else: # Non-private, invalid codes
+                sys.stderr.write('ERROR: Skipping unknown public sequence: %r\n' % esc_text)
+
+        # TODO: If this is a graphcs mode change, catch it.
+        elif esc_final in '012ABKU' and esc_interm in '()*+':
+            if esc_final == '0': # Switch to special graphics (line drawing) mode (for G0 or G1)
+                pass
+
+        elif esc_final in '@G8' and interm == '%':
+            pass
+
+        # Character size / alignment
+        elif esc_final in "34568" and interm == "#":
+            pass
+
+        elif esc_final in '0123456789:;<=>?': # Ignore unknown private sequences
+            sys.stderr.write("WARNING: Skipping unknown private sequence: %r\n" % esc_text)
+
         else:
-            numbers = list(map(int, args.split(';')))
+            sys.stderr.write("ERROR: Skipping unknown public sequence: %r\n" % esc_text)
 
-        return (AnsiTerm.Command(seq_type), is_private, char, numbers), data[match.end() :]
+        return data
+
 
     def get_cursor_idx(self):
         return self.cursor['y'] * self.cols + self.cursor['x']
 
-    def _evaluate_sequence(self, seq_type, is_private, char, numbers, data):
+
+    def _evaluate_csi_sequence(self, final, numbers, data):
         """
         Evaluates a sequence (i.e., this changes the state of the terminal).
         Is meant to be called with the return values from _parse_sequence as arguments.
@@ -189,23 +305,43 @@ class AnsiTerm:
         # Translate the cursor into an index into our 1-dimensional tileset.
         curidx = self.get_cursor_idx()
 
-        # If this is a private escape sequence, ignore it. (In the future these couldbe parsed.)
-        if is_private:
-            pass
-        # A catch for non-raw / non-CSI sequences; in the future this could be filled out.
-        elif seq_type != AnsiTerm.Command.CSI_SEQ and seq_type != AnsiTerm.Command.RAW: # CHAR_SET1, CHAR_SET2, CHAR_ALIGN, RESPONSE
-            pass
-
+        # Insert indicated number of blanks
+        if final == '@':
+            pass # TODO?
+        # Move cursor up
+        elif final == 'A':
+            self.cursor['y'] -= numbers[0]
+        # Move cursor down
+        elif final in 'Be':
+            self.cursor['y'] += numbers[0]
+        # Move cursor right
+        elif final in 'Ca':
+            self.cursor['x'] += numbers[0]
+        # Move cursor left
+        elif final == 'D':
+            self.cursor['x'] -= numbers[0]
+        # Move cursor down by # and over to column 1
+        elif final == 'E':
+            self.cursor['y'] += numbers[0]
+            self.cursor['x'] = 0
+        # Move cursor up by # and over to column 1
+        elif final == 'F':
+            self.cursor['y'] -= numbers[0]
+            self.cursor['x'] = 0
+        # Move cursor to indicated column in the current row
+        elif final in 'G`':
+            self.cursor['x'] = numbers[0] - 1
         # Sets cursor position
-        elif char == 'H':
+        elif final in 'Hf':
             self.cursor['y'] = numbers[0] - 1 # 1-based indexes
             self.cursor['x'] = numbers[1] - 1 #
-        # Sets color/boldness
-        elif char == 'm' or char == 'M':
-            while numbers:
-                numbers = self._parse_sgr(numbers)
+
+        # Move forward by number of tabs (implement?)
+        elif final == 'I':
+            pass
+
         # Clears (parts of) the screen.
-        elif char == 'J':
+        elif final == 'J':
             # From cursor to end of screen
             if numbers[0] == 0:
                 range_ = (curidx, self.cols - self.cursor['x'] - 1)
@@ -216,11 +352,12 @@ class AnsiTerm:
             elif numbers[0] == 2:
                 range_ = (0, self.cols * self.rows - 1)
             else:
-                raise Exception('Unknown argument for J parameter: %s (data=%r)' % (numbers, data[:20]))
+                sys.stderr.write('ERROR: Unknown argument(s) in CSI command J%s\n' % numbers)
+                return data
             for i in range(*range_):
                 self.tiles[i].reset()
         # Clears (parts of) the line
-        elif char == 'K':
+        elif final == 'K':
             # From cursor to end of line
             if numbers[0] == 0:
                 range_ = (curidx, curidx + self.cols - self.cursor['x'] - 1)
@@ -231,63 +368,88 @@ class AnsiTerm:
             elif numbers[0] == 2:
                 range_ = (curidx % self.cols, curidx % self.cols + self.cols)
             else:
-                raise Exception('Unknown argument for K parameter: %s (data=%r)' % (numbers, data[:20]))
+                sys.stderr.write('ERROR: Unknown argument(s) in CSI command K%s\n' % numbers)
+                return data
             for i in range(*range_):
                 self.tiles[i].reset()
-        # Move cursor up
-        elif char == 'A':
-            self.cursor['y'] -= numbers[0]
-        # Move cursor down
-        elif char == 'B':
-            self.cursor['y'] += numbers[0]
-        # Move cursor right
-        elif char == 'C':
-            self.cursor['x'] += numbers[0]
-        # Move cursor left
-        elif char == 'D':
-            self.cursor['x'] -= numbers[0]
-        # Toggle between special / normal character set; we will probably need to implement eventually.
-        elif char in 'FG':
+
+        # Insert # of blank lines at current row
+        elif final == 'L':
             pass
-        elif char == 'r' or char == 'l': # TODO
+        # Delete # of blank lines at current row *OR* get mouse click... if no params and mouse on?
+        elif final == 'M':
             pass
-        # Save / restore xterm icon; we can ignore this.
-        elif char == 't':
+        # Delete indicated number of characters
+        elif final == 'P':
             pass
-        # Keypad modes; we can ignore these.
-        elif char in '=<>':
+        # Erase indicated number of characters to the right
+        elif final == 'X':
             pass
+
+        # Move backward by number of tabs (implement?)
+        elif final == 'Z':
+            pass
+
+        # Repeat preceding character indicated number of times
+        elif final == 'b':
+            pass
+
+        # Move cursor to indicated row
+        elif final == 'd':
+            pass
+
+        elif final == 'g': # TODO?
+            pass
+        elif final == 'h': # TODO?
+            pass
+        elif final == 'l': # TODO?
+            pass
+
+        # Sets color/boldness
+        elif final == 'm':
+            while numbers:
+                numbers = self._parse_sgr(numbers)
+
+        elif final in 'STcin': # Ignore? Scrolling, etc
+            pass
+
         else:
-            raise Exception('Unknown escape code: char=%r numbers=%r data=%r' % (char, numbers, data[:20]))
+            sys.stderr.write('ERROR: Unknown CSI sequence: %s%s\n' % (final, numbers))
+
+        if final in 'ILMPXZbdghl':
+            sys.stderr.write("WARNING: CSI sequence not implemented: %s%s\n" % (final, numbers))
+
+        return data
+
 
     def feed(self, data):
         """Feeds the terminal with input."""
         while data:
             # If the data starts with \x1b, try to parse end evaluate a
             # sequence.
-            parsed, data = self._parse_sequence(data)
-            if parsed:
-                self._evaluate_sequence(*parsed, data)
-            else:
-                # If we end up here, the character should should just be
-                # added to the current tile and the cursor should be updated.
-                # Some characters such as \r, \n will only affect the cursor.
-                # TODO: Find out exactly what should be accepted here.
-                #       Only ASCII-7 perhaps?
-                a = data[0]
-                if a == '\r':
-                    self.cursor['x'] = 0
-                elif a == '\b':
-                    self.cursor['x'] -= 1
-                elif a == '\n':
-                    self.cursor['y'] += 1
-                    if self.linefeed_is_newline:
-                        self.cursor['x'] = 0
-                elif a == '\x0f' or a == '\x00':
-                    pass
-                else:
-                    self.tiles[self.get_cursor_idx()].set(a, self.color)
-                    self.cursor['x'] += 1
+            if data[0] == '\x1b':
+                data = self._parse_sequence(data)
+                continue
+#                self._evaluate_sequence(*parsed, data)
 
-                data = data[1:]
+            # If we end up here, the character should should just be
+            # added to the current tile and the cursor should be updated.
+            # Some characters such as \r, \n will only affect the cursor.
+            # TODO: Find out exactly what should be accepted here.
+            #       Only ASCII-7 perhaps?
+            a = data[0]
+            if a == '\r':
+                self.cursor['x'] = 0
+            elif a == '\b':
+                self.cursor['x'] -= 1
+            elif a == '\n':
+                self.cursor['y'] += 1
+                if self.linefeed_is_newline:
+                    self.cursor['x'] = 0
+            elif a == '\x0f' or a == '\x00':
+                pass
+            else:
+                self.tiles[self.get_cursor_idx()].set(a, self.color)
+                self.cursor['x'] += 1
+            data = data[1:]
         self._fix_cursor()
