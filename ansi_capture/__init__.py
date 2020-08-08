@@ -153,7 +153,7 @@ class AnsiTerm:
 
 
     def _evaluate_private_csi(self, params, interm, final, data):
-        sys.stderr.write("WARNING: unimplemented private CSI sequence - %s%s%s\n" % (final, ":" + interm if interm else "", params))
+        sys.stderr.write("WARNING: unimplemented private CSI sequence - %s(%s)%s\n" % (interm + ":" if interm else "", params, final))
         if final == 'r': # TODO?
             pass
         # Save / restore xterm icon; we can ignore this.
@@ -372,6 +372,7 @@ class AnsiTerm:
                 return data
             for i in range(*range_):
                 self.tiles[i].reset()
+
         # Clears (parts of) the line
         elif final == 'K':
             # From cursor to end of line
@@ -412,7 +413,7 @@ class AnsiTerm:
 
         # Move cursor to indicated row
         elif final == 'd':
-            pass
+            self.cursor['y'] = numbers[0] - 1
 
         elif final == 'g': # TODO?
             pass
@@ -432,7 +433,7 @@ class AnsiTerm:
         else:
             sys.stderr.write('ERROR: Unknown CSI sequence: %s%s\n' % (final, numbers))
 
-        if final in 'ILMPXZbdghl':
+        if final in 'ILMPXZbghl':
             sys.stderr.write("WARNING: CSI sequence not implemented: %s%s\n" % (final, numbers))
 
         return data
@@ -441,12 +442,10 @@ class AnsiTerm:
     def feed(self, data):
         """Feeds the terminal with input."""
         while data:
-            # If the data starts with \x1b, try to parse end evaluate a
-            # sequence.
+            # If the data starts with \x1b, try to parse end evaluate a sequence.
             if data[0] == '\x1b':
                 data = self._parse_sequence(data)
                 continue
-#                self._evaluate_sequence(*parsed, data)
 
             # If we end up here, the character should should just be
             # added to the current tile and the cursor should be updated.
@@ -466,9 +465,8 @@ class AnsiTerm:
                 pass
             else:
                 # If we're in graphics mode & the character is above 0x5f, use the special glyph.
-                if self.graphics_mode:
-                    if ord(a) >= ord('`'):
-                        a = AnsiTerm._special_graphics_chars[ord(a) - ord('`')]
+                if self.graphics_mode and ord(a) >= ord('`'):
+                    a = AnsiTerm._special_graphics_chars[ord(a) - ord('`')]
 
                 self.tiles[self.get_cursor_idx()].set(a, self.color)
                 self.cursor['x'] += 1
